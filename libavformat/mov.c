@@ -1005,7 +1005,8 @@ static int mov_read_adrm(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     int ret = 0;
     uint8_t *activation_bytes = c->activation_bytes;
     uint8_t *fixed_key = c->audible_fixed_key;
-
+	char cracking = 0;
+	
     c->aax_mode = 1;
 
     sha = av_sha_alloc();
@@ -1030,15 +1031,24 @@ static int mov_read_adrm(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
     /* verify activation data */
     if (!activation_bytes) {
-        av_log(c->fc, AV_LOG_WARNING, "[aax] activation_bytes option is missing!\n");
+        av_log(c->fc, AV_LOG_WARNING, "[aax] activation_bytes option is missing!\nBeginning cracking...");
         ret = 0;  /* allow ffprobe to continue working on .aax files */
-        goto fail;
+        
+        //signal to crack the encryption in the next step.
+        cracking = 1;
+        
+        //no bytes provided, so alloc them now.
+        activation_bytes = av_malloc(4);
+        
+        //goto fail;
     }
-    if (c->activation_bytes_size != 4) {
+    else if (c->activation_bytes_size != 4) {
         av_log(c->fc, AV_LOG_FATAL, "[aax] activation_bytes value needs to be 4 bytes!\n");
         ret = AVERROR(EINVAL);
         goto fail;
     }
+	
+
 
     /* verify fixed key */
     if (c->audible_fixed_key_size != 16) {
@@ -1046,6 +1056,52 @@ static int mov_read_adrm(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         ret = AVERROR(EINVAL);
         goto fail;
     }
+
+
+    if(cracking==1){
+        for(uint32_t code = 1; code != 0; code++){
+   	        uint8_t prev = activation_bytes[2] & 0xf0;
+
+            activation_bytes[0] = code & 0xff;
+            activation_bytes[1] = (code & 0xff00) >> 8;
+            activation_bytes[2] = (code & 0xff0000) >> 16;
+            activation_bytes[3] = (code & 0xff000000) >> 24;
+
+            
+            
+            /* AAX (and AAX+) key derivation */
+		    av_sha_init(sha, 160);
+		    av_sha_update(sha, fixed_key, 16);
+		    av_sha_update(sha, activation_bytes, 4);
+		    av_sha_final(sha, intermediate_key);
+		    av_sha_init(sha, 160);
+		    av_sha_update(sha, fixed_key, 16);
+		    av_sha_update(sha, intermediate_key, 20);
+		    av_sha_update(sha, activation_bytes, 4);
+		    av_sha_final(sha, intermediate_iv);
+		    av_sha_init(sha, 160);
+		    av_sha_update(sha, intermediate_key, 16);
+		    av_sha_update(sha, intermediate_iv, 16);
+    	    av_sha_final(sha, calculated_checksum);
+    	    if (memcmp(calculated_checksum, file_checksum, 20)) { // critical error
+    	        //av_log(c->fc, AV_LOG_ERROR, "[aax] mismatch in checksums!\n");
+    	        //ret = AVERROR_INVALIDDATA;
+    	        if( (activation_bytes[2] & 0xf0) != prev){
+    	        	float prog = ((activation_bytes[3] << 8) + activation_bytes[2]) / 65.536;
+    	        	float prob_prog = ((activation_bytes[3] << 8) + activation_bytes[2]) / (32.768 + 32.768*prog/100.0);
+    	        	printf("Cracking: %.1f%% (longest) %.1f%% (average)\n", prog,prob_prog);
+	    	    }
+    	        continue;
+            
+        	}
+        	else{
+        		//key is printed in reverse order to how it's stored internally
+        		printf("Key found: %02x%02x%02x%02x",activation_bytes[0],activation_bytes[1],activation_bytes[2],activation_bytes[3]);
+        		break;
+        	}
+        }
+    }
+    
 
     /* AAX (and AAX+) key derivation */
     av_sha_init(sha, 160);
