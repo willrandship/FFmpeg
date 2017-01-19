@@ -1005,6 +1005,7 @@ static int mov_read_adrm(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     int ret = 0;
     uint8_t *activation_bytes = c->activation_bytes;
     uint8_t *fixed_key = c->audible_fixed_key;
+    uint8_t prev;
     char cracking = 0;
 
     c->aax_mode = 1;
@@ -1037,8 +1038,9 @@ static int mov_read_adrm(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         //signal to crack the encryption in the next step.
         cracking = 1;
 
-        //no bytes provided, so alloc them now.
+        //no bytes provided, so allocate them now.
         activation_bytes = av_malloc(4);
+        c->activation_bytes_size = 4;
 
     }
     else if (c->activation_bytes_size != 4) {
@@ -1056,7 +1058,7 @@ static int mov_read_adrm(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
     if(cracking==1){
         for(uint32_t code = 1; code != 0; code++){
-            uint8_t prev = activation_bytes[2] & 0xf0;
+            prev = activation_bytes[2] & 0xf0;
 
             activation_bytes[0] = code & 0xff;
             activation_bytes[1] = (code & 0xff00) >> 8;
@@ -1077,26 +1079,30 @@ static int mov_read_adrm(MOVContext *c, AVIOContext *pb, MOVAtom atom)
             av_sha_update(sha, intermediate_key, 16);
             av_sha_update(sha, intermediate_iv, 16);
             av_sha_final(sha, calculated_checksum);
-            if (memcmp(calculated_checksum, file_checksum, 20)) { // Not the correct key
+
+            //Matching key not found
+            if (memcmp(calculated_checksum, file_checksum, 20)) {
 
                 //Every 1/4096 IDs, log progress
                 if( (activation_bytes[2] & 0xf0) != prev){
-                    //Longest vs likely percentage finished. (odds are it's halfway between current and last position)
+                    //Longest vs likely percentage finished.
+                    //It's likely halfway between current and last codes)
                     float prog = ((activation_bytes[3] << 8) + activation_bytes[2]) / 65.536;
                     float prob_prog = ((activation_bytes[3] << 8) + activation_bytes[2]) / (32.768 + 32.768*prog/100.0);
                     av_log(c->fc, AV_LOG_DEBUG, "Progress: %.1f%% (longest) %.1f%% (average)\n", prog,prob_prog);
                 }
                 continue;
-            
             }
+
+            //Matching Key found
             else{
-                //key is printed in reverse order to how it's stored internally. This prints in the form -activation_bytes accepts.
+                //Key is printed in reverse order to how it's stored internally. 
+                //This prints in the form -activation_bytes accepts.
                 av_log(c->fc, AV_LOG_DEBUG, "Key found: %02x%02x%02x%02x\n",activation_bytes[0],activation_bytes[1],activation_bytes[2],activation_bytes[3]);
                 break;
             }
         }
     }
-    
 
     /* AAX (and AAX+) key derivation */
     av_sha_init(sha, 160);
