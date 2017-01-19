@@ -1031,7 +1031,7 @@ static int mov_read_adrm(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
     /* verify activation data */
     if (!activation_bytes) {
-        av_log(c->fc, AV_LOG_WARNING, "[aax] activation_bytes option is missing!\nBeginning cracking...");
+        av_log(c->fc, AV_LOG_WARNING, "[aax] activation_bytes option is missing! The ID will be brute-forced.\n");
         ret = 0;  /* allow ffprobe to continue working on .aax files */
         
         //signal to crack the encryption in the next step.
@@ -1040,7 +1040,6 @@ static int mov_read_adrm(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         //no bytes provided, so alloc them now.
         activation_bytes = av_malloc(4);
         
-        //goto fail;
     }
     else if (c->activation_bytes_size != 4) {
         av_log(c->fc, AV_LOG_FATAL, "[aax] activation_bytes value needs to be 4 bytes!\n");
@@ -1083,20 +1082,21 @@ static int mov_read_adrm(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 		    av_sha_update(sha, intermediate_key, 16);
 		    av_sha_update(sha, intermediate_iv, 16);
     	    av_sha_final(sha, calculated_checksum);
-    	    if (memcmp(calculated_checksum, file_checksum, 20)) { // critical error
-    	        //av_log(c->fc, AV_LOG_ERROR, "[aax] mismatch in checksums!\n");
-    	        //ret = AVERROR_INVALIDDATA;
+    	    if (memcmp(calculated_checksum, file_checksum, 20)) { // Not the correct key
+    	    	
+    	    	//Every 1/4096 IDs, log progress
     	        if( (activation_bytes[2] & 0xf0) != prev){
+    	        	//Longest vs likely percentage finished. (odds are it's halfway between current and last position)
     	        	float prog = ((activation_bytes[3] << 8) + activation_bytes[2]) / 65.536;
     	        	float prob_prog = ((activation_bytes[3] << 8) + activation_bytes[2]) / (32.768 + 32.768*prog/100.0);
-    	        	printf("Cracking: %.1f%% (longest) %.1f%% (average)\n", prog,prob_prog);
+    	        	av_log(c->fc, AV_LOG_DEBUG, "Progress: %.1f%% (longest) %.1f%% (average)\n", prog,prob_prog);
 	    	    }
     	        continue;
             
         	}
         	else{
-        		//key is printed in reverse order to how it's stored internally
-        		printf("Key found: %02x%02x%02x%02x",activation_bytes[0],activation_bytes[1],activation_bytes[2],activation_bytes[3]);
+        		//key is printed in reverse order to how it's stored internally. This prints in the form -activation_bytes accepts.
+        		av_log(c->fc, AV_LOG_DEBUG, "Key found: %02x%02x%02x%02x\n",activation_bytes[0],activation_bytes[1],activation_bytes[2],activation_bytes[3]);
         		break;
         	}
         }
